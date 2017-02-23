@@ -175,7 +175,6 @@ int main(int argc, char *argv[]) {
 		}
 		else if ((stricmp(argv[i], "-o") == 0) && (argc > i+1))
 		{
-			printf("%d %d\n",argc,i);
 			FILE* fp = fopen(argv[i + 1], "w");
 			if (fp){ out = fp; }
 			else
