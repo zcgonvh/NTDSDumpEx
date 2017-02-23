@@ -517,7 +517,7 @@ BOOL NTDS::IsAccountMachine(DWORD dwUserCtrl) {
 }
 
 DWORD NTDS::GetColumnData(ULONG columnId, PVOID pbBuffer, DWORD cbBufSize) {
-	ZeroMemory(pbBuffer, cbBufSize);
+	if (pbBuffer){ ZeroMemory(pbBuffer, cbBufSize); }
 	DWORD dwSize = 0;
 
 	err = JetRetrieveColumn(sesId, tableId, columnId,
@@ -555,8 +555,6 @@ BOOL NTDS::GetHashes(char fmt, BOOL bHistory, BOOL bInactive, BOOL bMachines, BO
 	BYTE lmHash[256], ntHash[256], lmHistory[256], ntHistory[256], sid[256];
 	DWORD rid, dwUserCtrl;
 	DWORD dwAcc, dwMac, dwEnt, dwHis;
-	LPBYTE plmHist = (LPBYTE)malloc(256);
-	LPBYTE pntHist = (LPBYTE)malloc(256);
 	// get column ids corresponding to user attributes
 	ULONG uacId = GetColumnId(ATT_USER_ACCOUNT_CONTROL);
 	ULONG sidId = GetColumnId(ATT_OBJECT_SID);
@@ -671,10 +669,12 @@ BOOL NTDS::GetHashes(char fmt, BOOL bHistory, BOOL bInactive, BOOL bMachines, BO
 						//dump histories
 						if (bHistory)
 						{
-							ZeroMemory(plmHist, 256);
-							ZeroMemory(pntHist, 256);
-							DWORD dwlmhSize = GetColumnData(lmHistId, plmHist, 256);
-							DWORD dwnthSize = GetColumnData(ntHistId, pntHist, 256);
+							DWORD dwlmhSize = GetColumnData(lmHistId, 0, 0);
+							DWORD dwnthSize = GetColumnData(ntHistId, 0, 0);
+							LPBYTE plmHist = (LPBYTE)malloc(dwlmhSize);
+							LPBYTE pntHist = (LPBYTE)malloc(dwnthSize);
+							GetColumnData(lmHistId, plmHist, dwlmhSize);
+							GetColumnData(ntHistId, pntHist, dwlmhSize);
 							DWORD max = dwlmhSize > dwnthSize ? dwlmhSize : dwnthSize;
 							if ((max > 0) && (max - 24 >= 16))
 							{
@@ -715,6 +715,8 @@ BOOL NTDS::GetHashes(char fmt, BOOL bHistory, BOOL bInactive, BOOL bMachines, BO
 									dwHis++;
 								}
 							}
+							free(plmHist);
+							free(pntHist);
 						}
 						if (IsAccountMachine(dwUserCtrl))
 						{
@@ -740,7 +742,5 @@ BOOL NTDS::GetHashes(char fmt, BOOL bHistory, BOOL bInactive, BOOL bMachines, BO
 	}
 	// close table
 	err = JetCloseTable(sesId, tableId);
-	free(plmHist);
-	free(pntHist);
 	return err == JET_errSuccess;
 }

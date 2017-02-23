@@ -123,7 +123,6 @@ void usage()
 		"-o    write output into\n"
 		"-h    dump hash histories(if available)\n"
 		"-p    dump description and path of home directory\n"
-		//"-i    dump disabled accounts\n"
 		"-m    dump machine accounts\n"
 		"-u    USE UPPER-CASE-HEX\n"
 		"\n"
@@ -204,11 +203,6 @@ int main(int argc, char *argv[]) {
 		{
 			chFmt = 'X';
 		}
-		/*else if ((stricmp(argv[i], "-i") == 0))
-		{
-		hasInactive = true;
-		i++;
-		}*/
 		else
 		{
 			usage();
