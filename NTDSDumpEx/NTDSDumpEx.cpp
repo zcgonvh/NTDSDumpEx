@@ -135,7 +135,7 @@ void usage()
 }
 int main(int argc, char *argv[]) {
 	setlocale(LC_ALL, "");
-	printf("ntds.dit hashes off-line dumper v0.2.\n"
+	printf("ntds.dit hashes off-line dumper v0.3.\n"
 		"Part of GMH's fuck Tools,Code by zcgonvh.\n\n"
 		);
 	char *sysfile = 0;

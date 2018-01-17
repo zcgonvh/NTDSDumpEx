@@ -93,20 +93,24 @@ typedef enum  {
 #define PEK_SALT_ROUNDS 1000
 
 typedef struct _PEK_HDR {
-	DWORD dwMajor;             // either 1 or 2
-	DWORD dwMinor;             // possibly inaccurate description
+	DWORD dwVersion;           // 1:unk, 2:2k3, 3:2016
+	DWORD dwFlag;             // possibly inaccurate description
 	BYTE bSalt[PEK_SALT_LEN];  // added with version 2
 } PEK_HDR, *PPEK_HDR;
 
-// unknown1 and unknown2 are used but I haven't investigated
-// since the key probably doesn't get changed much
+
+typedef struct _PEK_DATA_ENTRY
+{
+	DWORD dwIndex;             //index
+	BYTE bKey[PEK_VALUE_LEN];  //data
+}PEK_DATA_ENTRY, *PPEK_DATA_ENTRY;
+
 typedef struct _PEK_DATA {
 	BYTE bAuth[PEK_AUTH_LEN];  // verifies if decryption successful
 	FILETIME ftModified;       // when list was last changed
-	DWORD dwUnknown1;          // 
+	DWORD dwCurrentIndex;      // current key index
 	DWORD dwTotalKeys;         // total keys in list
-	DWORD dwUnknown2;          // 
-	BYTE bKey[PEK_VALUE_LEN];  // list can support multiple keys but it's not supported here at the moment.
+	_PEK_DATA_ENTRY entries[1];//entries
 } PEK_DATA, *PPEK_DATA;
 
 typedef struct _PEK_LIST {
@@ -120,13 +124,23 @@ typedef struct _PEK_LIST {
 // 
 // Seems to work fine with those . . .
 //
+#define SECRET_CRYPT_TYPE_RC4 0x11
+#define SECRET_CRYPT_TYPE_AES 0x13
 typedef struct _SECRET_DATA {
-	WORD wVersion;             //
+	WORD wType;             //encrypt type aes:0x13 RC4:0x11
 	WORD wUnknown;             // seems reserved
 	DWORD dwPEKIndex;          // key index for PEK_LIST
 	BYTE bSalt[PEK_SALT_LEN];  // RtlGenRandom();
 	BYTE pbData;
 } SECRET_DATA, *PSECRET_DATA;
+
+
+typedef struct _AES128_KEY_BLOB
+{
+	BLOBHEADER hdr;
+	DWORD dwKeySize;
+	BYTE bKey[16];
+}AES128_KEY_BLOB, *PAES128_KEY_BLOB;
 
 // ===============================================
 
@@ -154,17 +168,18 @@ private:
 	std::wstring dbName;
 	BOOL bPrintSize;
 
-	PEK_LIST pekList;            // size might exceed structure 
+	PPEK_LIST pekList;            // size might exceed structure 
 	// i estimate very rarely 
 	BOOL EnumColumns(VOID);
 	ULONG GetColumnId(DWORD);
 	BOOL IsAccountInactive(DWORD);
 	BOOL IsAccountMachine(DWORD);
 	DWORD GetColumnData(ULONG, PVOID, DWORD);
-	VOID DumpHash(DWORD, PBYTE, FILE*,char);
+	VOID DumpHash(DWORD, PBYTE,DWORD, FILE*,char);
 	VOID DisplayDecrypted(DWORD, PBYTE, FILE*, char);
 	VOID PEKDecryptSecretDataBlock(PBYTE, DWORD);
 	BOOL EncryptDecryptWithKey(PBYTE, DWORD, PBYTE, DWORD, DWORD, PBYTE, DWORD);
+	BOOL DecryptAes(PBYTE, DWORD, PBYTE, DWORD, PBYTE, DWORD);
 	std::vector<COLUMN_INFO> columns;  // only attributes
 public:
 	NTDS();

